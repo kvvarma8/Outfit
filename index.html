@@ -1096,7 +1096,23 @@ function figureSVG(pieces, owner, place, label) {
   const pre = 'f' + (++figN) + '-';
   const his = owner === 'his';
   const cx = 60, S = his ? 23 : 19, W = his ? 17 : 13, H = his ? 19 : 21;
-  const paint = it => { const c = colorOf(it); return COLORS[c] ? COLORS[c] : `url(#${pre}${c.replace(' ', '-')})`; };
+  // Photo fill: the uploaded photo is laid over the garment's region (user space, aspect kept),
+  // zoomed slightly to crop away the photo's background. Pieces without a photo use their color.
+  const photoDefs = new Map();
+  const paint = (it, box) => {
+    const src = imgSrc(it);
+    if (src && box) {
+      const key = it.id + '|' + box.map(v => Math.round(v)).join(',');
+      if (!photoDefs.has(key)) {
+        const id = pre + 'p' + photoDefs.size;
+        const [x, y, w, h] = box, zx = w * .24, zy = h * .16;
+        photoDefs.set(key, { id, def: `<pattern id="${id}" patternUnits="userSpaceOnUse" x="0" y="0" width="120" height="306"><rect width="120" height="306" fill="${COLORS[colorOf(it)] || '#9b9ea3'}"/><image href="${esc(src)}" x="${x - zx}" y="${y - zy}" width="${w + 2 * zx}" height="${h + 2 * zy}" preserveAspectRatio="xMidYMid slice"/></pattern>` });
+      }
+      return `url(#${photoDefs.get(key).id})`;
+    }
+    const c = colorOf(it);
+    return COLORS[c] ? COLORS[c] : `url(#${pre}${c.replace(' ', '-')})`;
+  };
   const pts = a => a.map(p => p.join(',')).join(' ');
   const mirror = a => a.map(([x, y]) => [2 * cx - x, y]);
   const poly = (a, f, cls = 'g') => `<polygon class="${cls}" points="${pts(a)}" fill="${f}"/>`;
@@ -1109,24 +1125,25 @@ function figureSVG(pieces, owner, place, label) {
   // mannequin
   const arm = [[cx + S, 54], [cx + S + 9, 148], [cx + S + 3, 150], [cx + S - 5, 64]];
   const leg = [[cx + H, 148], [cx + 1, 152], [cx + 4, 292], [cx + 12, 292]];
-  out.push(`<ellipse class="mq" cx="${cx}" cy="25" rx="11" ry="14"/><rect class="mq" x="${cx - 4.5}" y="36" width="9" height="16"/>`,
+  out.push(`<rect class="mq" x="${cx - 1.2}" y="292" width="2.4" height="8"/><ellipse class="mq" cx="${cx}" cy="302" rx="16" ry="2.6"/>`,
+    `<ellipse class="mq" cx="${cx}" cy="25" rx="11" ry="14"/><rect class="mq" x="${cx - 4.5}" y="36" width="9" height="16"/>`,
     poly(arm, '', 'mq') + poly(mirror(arm), '', 'mq'), poly(leg, '', 'mq') + poly(mirror(leg), '', 'mq'),
     `<path class="mq" d="M${cx - S},54 Q${cx},46 ${cx + S},54 L${cx + W + 1},120 L${cx + H},152 L${cx - H},152 L${cx - W - 1},120 Z"/>`,
     `<circle class="mq" cx="${cx + S + 6}" cy="153" r="3.4"/><circle class="mq" cx="${cx - S - 6}" cy="153" r="3.4"/>`,
     `<ellipse class="mq" cx="${cx + 8}" cy="296" rx="5.5" ry="3"/><ellipse class="mq" cx="${cx - 8}" cy="296" rx="5.5" ry="3"/>`);
 
-  // pieces
   const drawBottom = b => {
-    const f = paint(b), t = b.type;
-    if (t === 'skirt') return poly([[cx - W - 2, 118], [cx + W + 2, 118], [cx + H + 12, 226], [cx - H - 12, 226]], f);
+    const t = b.type;
+    if (t === 'skirt') { const f = paint(b, [cx - H - 12, 116, 2 * H + 24, 112]); return poly([[cx - W - 2, 118], [cx + W + 2, 118], [cx + H + 12, 226], [cx - H - 12, 226]], f); }
     const end = t === 'shorts' ? 190 : 288;
+    const f = paint(b, [cx - H - 4, 116, 2 * H + 8, end - 116]);
     const ank = t === 'leggings' ? 9 : t === 'jeans' ? 11.5 : 13;
     const outerX = t === 'shorts' ? H + 2 : ank;
     return poly([[cx - W - 2, 118], [cx + W + 2, 118], [cx + H + 1, 150], [cx + outerX, end], [cx + 1.5, end], [cx, 160], [cx - 1.5, end], [cx - outerX, end], [cx - H - 1, 150]], f)
       + (t === 'jeans' ? `<path class="ln" d="M${cx},118 V140"/>` : t === 'trousers' || t === 'suit' ? `<path class="ln" d="M${cx + 8},160 V${end - 4} M${cx - 8},160 V${end - 4}"/>` : '');
   };
   const drawTop = (tp, hem) => {
-    const f = paint(tp), t = tp.type;
+    const t = tp.type, f = paint(tp, [cx - S - 11, 42, 2 * S + 22, Math.max(hem, 152) - 42]);
     let svg = '';
     if (t === 'hoodie') svg += `<path class="g" fill="${f}" d="M${cx - 13},52 Q${cx - 15},28 ${cx},24 Q${cx + 15},28 ${cx + 13},52 Z"/>`;
     const longS = !['tshirt', 'tank', 'polo', 'activetop'].includes(t);
@@ -1134,69 +1151,75 @@ function figureSVG(pieces, owner, place, label) {
     const sh = t === 'tank' || t === 'activetop' ? S - 7 : S;
     svg += `<path class="g" fill="${f}" d="M${cx - sh},54 Q${cx},${t === 'tank' ? 62 : 48} ${cx + sh},54 L${cx + W + 2},120 L${cx + H + 1},${hem} L${cx - H - 1},${hem} L${cx - W - 2},120 Z"/>`;
     if (t === 'turtleneck') svg += `<rect class="g" x="${cx - 5.5}" y="40" width="11" height="13" rx="2" fill="${f}"/>`;
-    if (t === 'shirt' || t === 'polo') svg += `<path class="g" fill="${f}" d="M${cx - 6},49 L${cx},57 L${cx - 1},51 Z M${cx + 6},49 L${cx},57 L${cx + 1},51 Z"/><path class="ln" d="M${cx},57 V${Math.min(hem, t === 'polo' ? 70 : hem)}"/>`;
-    if (t === 'sweater') svg += `<path class="ln" d="M${cx - W - 2},${hem - 4} H${cx + W + 2}"/>`;
+    if (t === 'shirt' || t === 'polo') svg += `<path class="g" fill="${f}" d="M${cx - 6},49 L${cx},57 L${cx - 1},51 Z M${cx + 6},49 L${cx},57 L${cx + 1},51 Z"/><path class="ln" d="M${cx},57 V${t === 'polo' ? 70 : hem}"/>`;
     return svg;
   };
   const tucked = top && bottom && ['shirt', 'blouse', 'turtleneck', 'tank'].includes(top.type) && bottom.type !== 'leggings' && (place.f[0] >= 2 || bottom.type === 'skirt');
   const topHem = top && ['sweater', 'hoodie'].includes(top.type) ? 144 : 140;
-  if (shoe && shoe.type === 'boots') { /* boots go over trouser hems: drawn after bottoms */ }
   if (bottom && !tucked) out.push(drawBottom(bottom));
   if (top) out.push(drawTop(top, tucked ? 122 : topHem));
   if (bottom && tucked) {
     out.push(drawBottom(bottom));
     const belt = acc.find(a => a.type === 'belt');
-    if (belt) out.push(`<rect class="g" x="${cx - W - 2}" y="116" width="${2 * W + 4}" height="4.5" fill="${paint(belt)}"/>`);
+    if (belt) out.push(`<rect class="g" x="${cx - W - 2}" y="116" width="${2 * W + 4}" height="4.5" fill="${paint(belt, [cx - W - 2, 112, 2 * W + 4, 12])}"/>`);
   }
   if (one) {
-    const f = paint(one);
     if (one.type === 'jumpsuit') { out.push(drawBottom({ ...one, type: 'trousers' }), drawTop({ ...one, type: 'tank' }, 124)); }
-    else out.push(`<path class="g" fill="${f}" d="M${cx - S + 5},54 Q${cx},62 ${cx + S - 5},54 L${cx + W + 1},120 L${cx + H + 14},232 L${cx - H - 14},232 L${cx - W - 1},120 Z"/>`
-      + pair([[cx + S - 5, 54], [cx + S + 1, 72], [cx + S - 5, 74], [cx + S - 8, 60]], f));
+    else {
+      const f = paint(one, [cx - H - 14, 48, 2 * H + 28, 186]);
+      out.push(`<path class="g" fill="${f}" d="M${cx - S + 5},54 Q${cx},62 ${cx + S - 5},54 L${cx + W + 1},120 L${cx + H + 14},232 L${cx - H - 14},232 L${cx - W - 1},120 Z"/>`
+        + pair([[cx + S - 5, 54], [cx + S + 1, 72], [cx + S - 5, 74], [cx + S - 8, 60]], f));
+    }
   }
   if (shoe) {
-    const f = paint(shoe), t = shoe.type;
+    const t = shoe.type;
     [cx - 8, cx + 8].forEach(fx => {
-      if (t === 'boots') out.push(`<path class="g" fill="${f}" d="M${fx - 6},262 H${fx + 6} V296 Q${fx + 6},301 ${fx},301 Q${fx - 6},301 ${fx - 6},296 Z"/>`);
-      else if (t === 'heels') out.push(`<path class="g" fill="${f}" d="M${fx - 4},291 H${fx + 4} L${fx + 6},300 H${fx - 6} Z"/>`);
-      else if (t === 'sandals') out.push(`<path d="M${fx - 6},294 H${fx + 6} M${fx - 5},298 H${fx + 5}" stroke="${f}" stroke-width="2"/>`);
-      else out.push(`<ellipse class="g" cx="${fx}" cy="297" rx="7" ry="4" fill="${f}"/>` + (t === 'sneakers' || t === 'running' ? `<path d="M${fx - 6.5},299.5 H${fx + 6.5}" stroke="#f6f6f3" stroke-width="1.4"/>` : ''));
+      if (t === 'boots') { const f = paint(shoe, [fx - 6, 262, 12, 40]); out.push(`<path class="g" fill="${f}" d="M${fx - 6},262 H${fx + 6} V296 Q${fx + 6},301 ${fx},301 Q${fx - 6},301 ${fx - 6},296 Z"/>`); }
+      else {
+        const f = paint(shoe, [fx - 7, 289, 14, 12]);
+        if (t === 'heels') out.push(`<path class="g" fill="${f}" d="M${fx - 4},291 H${fx + 4} L${fx + 6},300 H${fx - 6} Z"/>`);
+        else if (t === 'sandals') out.push(`<path d="M${fx - 6},294 H${fx + 6} M${fx - 5},298 H${fx + 5}" stroke="${f}" stroke-width="2"/>`);
+        else out.push(`<ellipse class="g" cx="${fx}" cy="297" rx="7" ry="4" fill="${f}"/>` + (t === 'sneakers' || t === 'running' ? `<path d="M${fx - 6.5},299.5 H${fx + 6.5}" stroke="#f6f6f3" stroke-width="1.4"/>` : ''));
+      }
     });
   }
   const tie = acc.find(a => a.type === 'tie');
-  if (tie) out.push(`<path class="g" fill="${paint(tie)}" d="M${cx - 2},56 L${cx + 2},56 L${cx + 3.5},${tucked ? 112 : 104} L${cx},${tucked ? 117 : 109} L${cx - 3.5},${tucked ? 112 : 104} Z"/>`);
-  if (outer) {
-    const f = paint(outer), t = outer.type, isSuit = bottom && bottom.type === 'suit';
-    const hem = ['trench', 'coat'].includes(t) ? 234 : t === 'puffer' ? 162 : 150;
+  if (tie) out.push(`<path class="g" fill="${paint(tie, [cx - 4, 56, 8, 60])}" d="M${cx - 2},56 L${cx + 2},56 L${cx + 3.5},${tucked ? 112 : 104} L${cx},${tucked ? 117 : 109} L${cx - 3.5},${tucked ? 112 : 104} Z"/>`);
+  const jacket = (f, hem, t) => {
     const flare = hem > 200 ? 8 : 3;
     out.push(pair([[cx + S + 1, 52], [cx + S + 11, 148], [cx + S + 1, 150], [cx + S - 7, 62]], f));
-    const panel = [[cx + S + 1, 53], [cx + 9, 49], [cx + 4, 56], [cx + 4, hem], [cx + H + flare, hem], [cx + W + 3, 120]];
-    out.push(pair(panel, f));
-    if (['blazer', 'coat', 'trench'].includes(t)) out.push(`<path class="ln" d="M${cx + 9},49 L${cx + 4},${t === 'blazer' ? 92 : 84} M${cx - 9},49 L${cx - 4},${t === 'blazer' ? 92 : 84}"/>`);
+    out.push(pair([[cx + S + 1, 53], [cx + 9, 49], [cx + 4, 56], [cx + 4, hem], [cx + H + flare, hem], [cx + W + 3, 120]], f));
+    if (['blazer', 'coat', 'trench', 'suit'].includes(t)) out.push(`<path class="ln" d="M${cx + 9},49 L${cx + 4},${t === 'blazer' || t === 'suit' ? 92 : 84} M${cx - 9},49 L${cx - 4},${t === 'blazer' || t === 'suit' ? 92 : 84}"/>`);
+  };
+  if (outer) {
+    const t = outer.type;
+    const hem = ['trench', 'coat'].includes(t) ? 234 : t === 'puffer' ? 162 : 150;
+    const f = paint(outer, [cx - S - 12, 44, 2 * S + 24, hem - 44]);
+    jacket(f, hem, t);
     if (t === 'puffer') for (let y = 74; y < hem; y += 14) out.push(`<path class="ln" d="M${cx - W - 3},${y} H${cx + W + 3}"/>`);
     if (t === 'trench') out.push(`<rect class="g" x="${cx - W - 4}" y="117" width="${2 * W + 8}" height="4.5" fill="${f}"/>`);
     if (t === 'denimjacket') out.push(`<path class="ln" d="M${cx - W - 2},88 H${cx - 6} M${cx + 6},88 H${cx + W + 2}"/>`);
-    if (isSuit) { /* suit jacket shares the trouser color */ }
   } else if (bottom && bottom.type === 'suit') {
-    const f = paint(bottom);
-    out.push(pair([[cx + S + 1, 52], [cx + S + 11, 148], [cx + S + 1, 150], [cx + S - 7, 62]], f),
-      pair([[cx + S + 1, 53], [cx + 9, 49], [cx + 4, 56], [cx + 4, 150], [cx + H + 3, 150], [cx + W + 3, 120]], f),
-      `<path class="ln" d="M${cx + 9},49 L${cx + 4},92 M${cx - 9},49 L${cx - 4},92"/>`);
+    jacket(paint(bottom, [cx - S - 12, 44, 2 * S + 24, 106]), 150, 'suit');
   }
   acc.forEach(a => {
-    const f = paint(a);
     switch (a.type) {
-      case 'scarf': out.push(`<path class="g" fill="${f}" d="M${cx - 10},47 Q${cx},55 ${cx + 10},47 L${cx + 9},56 Q${cx},64 ${cx - 9},56 Z"/><rect class="g" x="${cx + 3}" y="56" width="6" height="46" fill="${f}"/>`); break;
-      case 'bag': out.push(`<path d="M${cx - S + 5},55 L${cx + S + 8},140" stroke="${f}" stroke-width="1.4"/><rect class="g" x="${cx + S + 1}" y="138" width="15" height="12" rx="2" fill="${f}"/>`); break;
-      case 'watch': out.push(`<rect class="g" x="${cx - S - 9}" y="141" width="6" height="4" rx="1" fill="${f}"/>`); break;
-      case 'hat': out.push(['cool', 'cold'].includes(place._band) ? `<path class="g" fill="${f}" d="M${cx - 12},22 Q${cx},4 ${cx + 12},22 Z"/>`
-        : `<ellipse class="g" cx="${cx}" cy="15" rx="19" ry="3.5" fill="${f}"/><path class="g" fill="${f}" d="M${cx - 10},15 Q${cx},0 ${cx + 10},15 Z"/>`); break;
-      case 'sunglasses': out.push(`<rect x="${cx - 9}" y="21" width="7" height="4" rx="1.5" fill="${f}"/><rect x="${cx + 2}" y="21" width="7" height="4" rx="1.5" fill="${f}"/><path d="M${cx - 2},22.5 H${cx + 2}" stroke="${f}"/>`); break;
-      case 'jewelry': out.push(`<path d="M${cx - 6},51 Q${cx},60 ${cx + 6},51" fill="none" stroke="${f}" stroke-width="1.2"/>`); break;
-      case 'umbrella': { const x = cx - S - 6; out.push(`<polygon class="g" fill="${f}" points="${x},152 ${x + 3},162 ${x + 1},236 ${x - 1},236 ${x - 3},162"/>`); break; }
+      case 'scarf': { const f = paint(a, [cx - 10, 44, 20, 60]); out.push(`<path class="g" fill="${f}" d="M${cx - 10},47 Q${cx},55 ${cx + 10},47 L${cx + 9},56 Q${cx},64 ${cx - 9},56 Z"/><rect class="g" x="${cx + 3}" y="56" width="6" height="46" fill="${f}"/>`); break; }
+      case 'bag': { const f = paint(a, [cx + S, 134, 17, 18]); out.push(`<path d="M${cx - S + 5},55 L${cx + S + 8},140" stroke="${COLORS[colorOf(a)] || '#6a4529'}" stroke-width="1.4"/><rect class="g" x="${cx + S + 1}" y="138" width="15" height="12" rx="2" fill="${f}"/>`); break; }
+      case 'watch': out.push(`<rect class="g" x="${cx - S - 9}" y="141" width="6" height="4" rx="1" fill="${paint(a, [cx - S - 10, 139, 8, 8])}"/>`); break;
+      case 'hat': { const f = paint(a, [cx - 19, 0, 38, 19]); out.push(['cool', 'cold'].includes(place._band) ? `<path class="g" fill="${f}" d="M${cx - 12},22 Q${cx},4 ${cx + 12},22 Z"/>`
+        : `<ellipse class="g" cx="${cx}" cy="15" rx="19" ry="3.5" fill="${f}"/><path class="g" fill="${f}" d="M${cx - 10},15 Q${cx},0 ${cx + 10},15 Z"/>`); break; }
+      case 'sunglasses': { const f = COLORS[colorOf(a)] || '#1d1d1f'; out.push(`<rect x="${cx - 9}" y="21" width="7" height="4" rx="1.5" fill="${f}"/><rect x="${cx + 2}" y="21" width="7" height="4" rx="1.5" fill="${f}"/><path d="M${cx - 2},22.5 H${cx + 2}" stroke="${f}"/>`); break; }
+      case 'jewelry': out.push(`<path d="M${cx - 6},51 Q${cx},60 ${cx + 6},51" fill="none" stroke="${COLORS[colorOf(a)] || '#c8a54b'}" stroke-width="1.2"/>`); break;
+      case 'umbrella': { const x = cx - S - 6; out.push(`<polygon class="g" fill="${paint(a, [x - 4, 150, 8, 88])}" points="${x},152 ${x + 3},162 ${x + 1},236 ${x - 1},236 ${x - 3},162"/>`); break; }
     }
   });
-  return `<svg class="fig" viewBox="0 0 120 306" role="img" aria-label="${esc(label)}">${patternDefs(pre)}${out.join('')}</svg>`;
+  // soft studio light: brighter on the left, a touch of shadow on the right, over the clothes only
+  const shade = `<linearGradient id="${pre}shade" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#fff" stop-opacity=".16"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".16"/></linearGradient>`;
+  const body = out.join('');
+  const clothes = body.replace(/<(?:rect|ellipse|circle|polygon|path) class="mq"[^>]*\/>/g, '');
+  const mask = `<mask id="${pre}m">${clothes.replace(/fill="[^"]*"/g, 'fill="#fff"').replace(/stroke="(?!none)[^"]*"/g, 'stroke="#fff"').replace(/class="(g|ln)"/g, '')}</mask>`;
+  return `<svg class="fig" viewBox="0 0 120 306" role="img" aria-label="${esc(label)}"><defs>${patternDefs(pre).slice(6, -7)}${[...photoDefs.values()].map(d => d.def).join('')}${shade}${mask}</defs>${body}<rect x="0" y="0" width="120" height="306" fill="url(#${pre}shade)" mask="url(#${pre}m)" pointer-events="none"/></svg>`;
 }
 
 function indoorWeather(w) {
