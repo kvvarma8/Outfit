@@ -176,6 +176,7 @@ main { padding-block: 22px 64px; }
 .drop svg { width: 42px; height: 42px; flex: none; color: var(--accent); }
 .drop b { display: block; font-size: 16px; }
 .drop span { color: var(--muted); font-size: 13.5px; }
+.drop.locked { opacity: .55; cursor: not-allowed; }
 .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .upload-side { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 8px; align-content: center; }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
@@ -335,6 +336,10 @@ footer { color: var(--muted); font-size: 12.5px; padding-block: 0 40px; }
           <p>Add photos of each piece. Color and type are guessed from the photo and file name; fix anything that's off and it's saved in this browser.</p>
         </div>
       </div>
+      <div class="banner" id="migrateBanner" hidden>
+        <span id="migrateText"></span>
+        <button class="btn small" type="button" data-action="migrate">Move to shared closet</button>
+      </div>
       <div class="upload">
         <label class="drop" id="drop" for="file">
           <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 8l-9 6 4 7 4-2v21h16V19l4 2 4-7-9-6c-1 3-4 5-7 5s-6-2-7-5z"/><path d="M24 23v10M19 28l5-5 5 5"/></svg>
@@ -349,6 +354,9 @@ footer { color: var(--muted); font-size: 12.5px; padding-block: 0 40px; }
             <button type="button" data-owner="shared">Shared</button>
           </div>
           <span class="progress" id="progress"></span>
+          <span class="progress" id="syncNote"></span>
+          <div class="meter" id="storeMeter" hidden><i style="width:0%;background:var(--accent)"></i></div>
+          <span class="progress" id="storeText" hidden></span>
         </div>
       </div>
       <div class="filters" id="filters"></div>
@@ -393,7 +401,7 @@ footer { color: var(--muted); font-size: 12.5px; padding-block: 0 40px; }
     </section>
   </main>
 </div>
-<footer class="wrap">Photos and lists stay in this browser. Forecasts from Open-Meteo.</footer>
+<footer class="wrap" id="foot">Photos and lists stay in this browser. Forecasts from Open-Meteo.</footer>
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script>
@@ -601,8 +609,72 @@ const DB = (() => {
   return { all: () => tx('readonly', s => s.getAll()), put: it => tx('readwrite', s => s.put(it)), del: id => tx('readwrite', s => s.delete(id)) };
 })();
 let dbOk = true;
-async function persist(item) { try { await DB.put(item); } catch (e) { warnStorage(); } }
-async function unpersist(id) { try { await DB.del(id); } catch (e) { warnStorage(); } }
+// Shared cloud closet (claude.ai artifact storage). Falls back to this browser when unavailable.
+const cloud = { on: false, db: null, assets: null, readOnly: false, loaded: false, usage: null };
+const ITEM_FIELDS = ['owner', 'type', 'color', 'asset', 'added', 'review'];
+const LIST_FIELDS = ['name', 'owner', 'note', 'done', 'added'];
+const pick = (o, keys) => keys.reduce((a, k) => { if (o[k] !== undefined) a[k] = o[k]; return a; }, {});
+function cloudFail(e) {
+  if (e && e.code === 'invalid_argument') { cloud.readOnly = true; toast("You can view this closet but not change it. Ask the owner for edit access."); render(); }
+  else if (e && e.code === 'quota_exceeded') toast('Shared storage is full. Remove some pieces to add more.');
+  else toast("Couldn't save to the shared closet. Check your connection and try again.");
+}
+async function persist(item) {
+  if (cloud.on) { try { await cloud.db.collection('items').doc(item.id).set(pick(item, ITEM_FIELDS)); } catch (e) { cloudFail(e); } return; }
+  try { await DB.put(item); } catch (e) { warnStorage(); }
+}
+async function unpersist(item) {
+  if (cloud.on) {
+    try { await cloud.db.collection('items').doc(item.id).delete(); } catch (e) { cloudFail(e); return; }
+    if (item.asset && cloud.assets) { try { await cloud.assets.delete(item.asset); } catch (e) { /* photo stays in storage; row is gone */ } }
+    refreshUsage(); return;
+  }
+  try { await DB.del(item.id); } catch (e) { warnStorage(); }
+}
+async function listSave(l) {
+  if (cloud.on) { try { await cloud.db.collection('list').doc(l.id).set(pick(l, LIST_FIELDS)); } catch (e) { cloudFail(e); } return; }
+  store.set('list', state.list);
+}
+async function listDelete(id) {
+  if (cloud.on) { try { await cloud.db.collection('list').doc(id).delete(); } catch (e) { cloudFail(e); } return; }
+  store.set('list', state.list);
+}
+async function refreshUsage() {
+  if (!cloud.assets) return;
+  try { cloud.usage = (await cloud.assets.list()).usage; renderSync(); } catch (e) { /* meter is optional */ }
+}
+function fmtMB(b) { return b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(b < 1e7 ? 1 : 0) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB'; }
+function renderSync() {
+  const note = $('#syncNote'), meter = $('#storeMeter'), txt = $('#storeText'), dropEl = $('#drop');
+  const canUpload = !cloud.on || (!!cloud.assets && !cloud.readOnly);
+  dropEl.classList.toggle('locked', !canUpload);
+  $('#file').disabled = !canUpload;
+  if (!cloud.on) { note.textContent = 'Saved in this browser only.'; meter.hidden = txt.hidden = true; }
+  else {
+    note.textContent = !cloud.loaded ? 'Connecting to the shared closet…'
+      : cloud.readOnly ? 'Shared closet · view only'
+      : !cloud.assets ? 'Shared closet · only editors can add photos'
+      : 'Shared closet · syncs to everyone you share with';
+    const u = cloud.usage;
+    if (u && u.maxBytes) {
+      meter.hidden = txt.hidden = false;
+      meter.firstElementChild.style.width = Math.min(100, u.bytes / u.maxBytes * 100).toFixed(1) + '%';
+      txt.textContent = `${u.files} photo${u.files === 1 ? '' : 's'} · ${fmtMB(u.bytes)} of ${fmtMB(u.maxBytes)} used${u.maxFiles ? ` · up to ${u.maxFiles.toLocaleString()} photos` : ''}`;
+    } else meter.hidden = txt.hidden = true;
+  }
+  $('#foot').textContent = cloud.on ? 'Your closet and shopping list are stored with this page and shared with the people you give access. Forecasts from Open-Meteo.'
+    : 'Photos and lists stay in this browser. Forecasts from Open-Meteo.';
+  const mb = $('#migrateBanner');
+  const nLocal = state.localItems.length, nList = state.localList.length;
+  mb.hidden = !(cloud.on && cloud.loaded && cloud.assets && !cloud.readOnly && (nLocal || nList));
+  if (!mb.hidden) $('#migrateText').innerHTML = `<b>${nLocal ? nLocal + ' photo' + (nLocal === 1 ? '' : 's') : ''}${nLocal && nList ? ' and ' : ''}${nList ? nList + ' list item' + (nList === 1 ? '' : 's') : ''}</b> are saved only in this browser. Move them so everyone sees them.`;
+}
+function dataUrlToBlob(u) {
+  const [head, b64] = u.split(','); const bin = atob(b64); const a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return new Blob([a], { type: (head.match(/data:([^;]+)/) || [])[1] || 'image/jpeg' });
+}
+const canvasBlob = c => new Promise(res => c.toBlob(res, 'image/jpeg', .82));
 function warnStorage() { if (dbOk) { dbOk = false; toast("This browser isn't saving photos. They'll vanish when you close the page."); } }
 
 /* ---------- State ---------- */
@@ -619,6 +691,8 @@ const state = {
   filterOwner: 'all',
   filterCat: 'all',
   list: store.get('list', []),
+  localItems: [],
+  localList: [],
   seed: Math.floor(Math.random() * 1e6),
   tab: 'looks',
 };
@@ -912,12 +986,13 @@ function glyphInk(color) {
   const n = parseInt(hex.slice(1), 16), r = n >> 16, g = n >> 8 & 255, b = n & 255;
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > .55 ? 'rgba(0,0,0,.5)' : 'rgba(255,255,255,.78)';
 }
+const imgSrc = i => i.img || (i.asset ? '/_blob/' + i.asset : null);
 function phInner(item) {
-  if (item.img) return `<img src="${item.img}" alt="${esc(cap(colorOf(item)) + ' ' + TYPES[item.type].label.toLowerCase())}" loading="lazy">`;
+  if (imgSrc(item)) return `<img src="${esc(imgSrc(item))}" alt="${esc(cap(colorOf(item)) + ' ' + TYPES[item.type].label.toLowerCase())}" loading="lazy">`;
   const cat = TYPES[item.type].cat;
   return `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="color:${glyphInk(item.color)}">${GLYPH[item.type] || GLYPH[cat]}</svg>`;
 }
-function phStyle(item) { return item.img ? '' : `style="background:${swatchBg(item.color)}"`; }
+function phStyle(item) { return imgSrc(item) ? '' : `style="background:${swatchBg(item.color)}"`; }
 function tile(item) {
   return `<figure class="tile"><div class="ph" ${phStyle(item)}>${phInner(item)}</div>
     <figcaption><b>${esc(TYPES[item.type].label)}</b>${esc(cap(colorOf(item)))}</figcaption></figure>`;
@@ -1016,7 +1091,7 @@ function renderCloset() {
   $('#closetGrid').innerHTML = shown.map(i => `
     <div class="card ${i.review ? 'review' : ''} who-${i.owner}" data-id="${i.id}">
       <div class="ph" ${phStyle(i)}>${phInner(i)}<span class="who-pill">${WHO[i.owner]}</span>${i.review ? '<span class="flag">Check type</span>' : ''}${i.sample ? '<span class="flag" style="background:var(--muted)">Sample</span>' : ''}</div>
-      ${sample ? `<div style="font-size:13px"><b>${esc(TYPES[i.type].label)}</b><br><span style="color:var(--muted)">${esc(cap(colorOf(i)))}</span></div>` : `
+      ${sample || cloud.readOnly ? `<div style="font-size:13px"><b>${esc(TYPES[i.type].label)}</b><br><span style="color:var(--muted)">${esc(cap(colorOf(i)))}</span></div>` : `
       <select data-field="type" aria-label="Type">${typeOptions(i.type)}</select>
       <select data-field="color" aria-label="Color">${colorOptions(colorOf(i))}</select>
       <div class="card-row">
@@ -1081,7 +1156,7 @@ function renderTabs() {
   $('#sampleBanner').hidden = !usingSamples() || tab === 'closet' || tab === 'list';
 }
 
-function render() { renderBrief(); renderLooks(); renderCloset(); renderStaples(); renderList(); renderTabs(); }
+function render() { renderBrief(); renderLooks(); renderCloset(); renderStaples(); renderList(); renderTabs(); renderSync(); }
 
 /* ---------- Uploads ---------- */
 function loadImage(file) {
@@ -1140,16 +1215,27 @@ async function handleFiles(files) {
       c.width = Math.round(img.naturalWidth * sc); c.height = Math.round(img.naturalHeight * sc);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       const guess = guessType(file.name);
-      const item = {
-        id: uid(), owner: state.uploadOwner, type: guess || 'tshirt', color: detectColor(img),
-        img: c.toDataURL('image/jpeg', .82), added: Date.now() + done, review: !guess,
-      };
-      state.items.push(item);
-      await persist(item);
+      const item = { id: uid(), owner: state.uploadOwner, type: guess || 'tshirt', color: detectColor(img), added: Date.now() + done, review: !guess };
+      if (cloud.on) {
+        const blob = await canvasBlob(c);
+        const up = await cloud.assets.upload(blob, { type: 'image/jpeg' });
+        item.asset = up.id;
+        await cloud.db.collection('items').doc(item.id).set(pick(item, ITEM_FIELDS));
+      } else {
+        item.img = c.toDataURL('image/jpeg', .82);
+        state.items.push(item);
+        await persist(item);
+      }
       done++;
-    } catch (e) { failed++; }
+    } catch (e) {
+      failed++;
+      if (e && (e.code === 'quota_or_state' || e.code === 'quota_exceeded')) { toast('Shared storage is full. Remove some pieces to add more.'); break; }
+      if (e && e.code === 'rate_limited') { toast('Uploading too fast. Wait a moment, then add the rest.'); break; }
+      if (e && e.code === 'invalid_argument') { cloudFail(e); break; }
+    }
   }
-  prog.textContent = `${done} added${failed ? `, ${failed} couldn't be read (try JPG or PNG)` : ''}.`;
+  prog.textContent = `${done} added${failed ? `, ${failed} couldn't be added (try JPG or PNG)` : ''}.`;
+  refreshUsage();
   state.filterOwner = 'all';
   render();
   if (done) toast(`Added ${done} piece${done === 1 ? '' : 's'} to ${WHO[state.uploadOwner].toLowerCase()}`);
@@ -1158,8 +1244,9 @@ async function handleFiles(files) {
 /* ---------- List ---------- */
 function addToList(name, owner, note) {
   if (inList(name, owner)) return false;
-  state.list.push({ id: uid(), name, owner, note: note || '', done: false });
-  store.set('list', state.list);
+  const l = { id: uid(), name, owner, note: note || '', done: false, added: Date.now() };
+  state.list.push(l);
+  listSave(l);
   return true;
 }
 function listText() {
@@ -1214,7 +1301,7 @@ document.addEventListener('change', e => {
   }
   if (t.dataset.action === 'toggle') {
     const l = state.list.find(x => x.id === t.closest('.shop-item').dataset.lid);
-    if (l) { l.done = t.checked; store.set('list', state.list); renderList(); }
+    if (l) { l.done = t.checked; listSave(l); renderList(); }
   }
 });
 
@@ -1241,13 +1328,20 @@ document.addEventListener('click', e => {
       return;
     }
     const id = t.closest('.card').dataset.id;
-    state.items = state.items.filter(i => i.id !== id); unpersist(id); render(); toast('Removed');
+    const it = state.items.find(i => i.id === id);
+    state.items = state.items.filter(i => i.id !== id); if (it) unpersist(it); render(); toast('Removed');
   }
   if (a === 'delItem') {
     const id = t.closest('.shop-item').dataset.lid;
-    state.list = state.list.filter(l => l.id !== id); store.set('list', state.list); render();
+    state.list = state.list.filter(l => l.id !== id); listDelete(id); render();
   }
-  if (a === 'clearDone') { state.list = state.list.filter(l => !l.done); store.set('list', state.list); render(); }
+  if (a === 'clearDone') {
+    const gone = state.list.filter(l => l.done);
+    state.list = state.list.filter(l => !l.done);
+    if (cloud.on) gone.forEach(l => listDelete(l.id)); else store.set('list', state.list);
+    render();
+  }
+  if (a === 'migrate') migrate(t);
   if (a === 'copyList') {
     const text = listText(), box = $('#copyBox');
     const fallback = () => { box.hidden = false; box.value = text; box.focus(); box.select(); toast('Select all and copy'); };
@@ -1265,11 +1359,60 @@ $('#addForm').addEventListener('submit', e => {
   else toast('Already on the list');
 });
 
+/* ---------- Shared closet ---------- */
+async function migrate(btn) {
+  btn.disabled = true;
+  let moved = 0;
+  for (const it of [...state.localItems]) {
+    try {
+      btn.textContent = `Moving ${moved + 1} of ${state.localItems.length}…`;
+      const up = await cloud.assets.upload(dataUrlToBlob(it.img), { type: 'image/jpeg' });
+      const row = { ...pick(it, ITEM_FIELDS), asset: up.id };
+      await cloud.db.collection('items').doc(it.id).set(row);
+      try { await DB.del(it.id); } catch (e) { /* local copy stays */ }
+      state.localItems = state.localItems.filter(x => x.id !== it.id);
+      moved++;
+    } catch (e) { cloudFail(e); break; }
+  }
+  for (const l of [...state.localList]) {
+    if (!inList(l.name, l.owner)) { try { await cloud.db.collection('list').doc(l.id).set(pick({ ...l, added: l.added || Date.now() }, LIST_FIELDS)); } catch (e) { cloudFail(e); break; } }
+    state.localList = state.localList.filter(x => x.id !== l.id);
+  }
+  if (!state.localList.length) store.set('list', []);
+  btn.disabled = false; btn.textContent = 'Move to shared closet';
+  refreshUsage(); render();
+  toast(moved ? `Moved ${moved} photo${moved === 1 ? '' : 's'} to the shared closet` : 'Moved to the shared closet');
+}
+async function connectCloud() {
+  if (!(window.claude && typeof window.claude.use === 'function')) return;
+  let db = null, assets = null;
+  try { [db, assets] = await Promise.all([window.claude.use('db'), window.claude.use('assets')]); } catch (e) { return; }
+  if (!db) return;
+  cloud.on = true; cloud.db = db; cloud.assets = assets;
+  state.localItems = state.items.filter(i => i.img);
+  state.localList = state.list.slice();
+  state.items = []; state.list = [];
+  render();
+  const timer = setTimeout(() => { if (!cloud.loaded) { $('#syncNote').textContent = "Can't reach the shared closet yet. Showing what's loaded so far."; } }, 10000);
+  let gotItems = false, gotList = false;
+  const ready = snap => { if (!snap.metadata.fromCache && gotItems && gotList) { cloud.loaded = true; clearTimeout(timer); } };
+  db.collection('items').onSnapshot(snap => {
+    state.items = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(i => TYPES[i.type]);
+    gotItems = true; ready(snap); render();
+  }, () => { cloud.loaded = true; clearTimeout(timer); render(); });
+  db.collection('list').orderBy('added').onSnapshot(snap => {
+    state.list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    gotList = true; ready(snap); render();
+  }, () => { cloud.loaded = true; clearTimeout(timer); render(); });
+  refreshUsage();
+}
+
 /* ---------- Boot ---------- */
 (async function boot() {
   try { state.items = (await DB.all()) || []; } catch (e) { dbOk = false; }
   route();
   render();
+  connectCloud();
   const last = store.get('loc', '');
   if (last) { $('#loc').value = last; lookup(last); }
 })();
