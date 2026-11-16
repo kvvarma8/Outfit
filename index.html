@@ -459,15 +459,38 @@ const TYPES = {
 const CATS = { outer: 'Layers', top: 'Tops', onepiece: 'Dresses & sets', bottom: 'Bottoms', shoes: 'Shoes', acc: 'Accessories' };
 const CAT_ORDER = ['outer', 'top', 'onepiece', 'bottom', 'shoes', 'acc'];
 
-const COLORS = {
-  black: '#1d1d1f', charcoal: '#45484d', grey: '#9b9ea3', white: '#f6f6f3', cream: '#ece3cf',
-  navy: '#1f2b47', denim: '#4d6790', 'light blue': '#a8c3e3', blue: '#3560b5',
-  green: '#3e7a52', olive: '#6c6b3c', khaki: '#b9a87c', beige: '#d8c6a6', camel: '#b6854c', brown: '#6a4529',
-  burgundy: '#6d1f2d', red: '#b9302f', pink: '#e6a6b5', purple: '#6b4a8d', yellow: '#e2bf4b', orange: '#d8772c',
-  metallic: '#c9b98a', striped: null, print: null,
+// Colors grouped for the picker. Patterns have no single hex and are drawn as swatches.
+const COLOR_GROUPS = {
+  Neutrals: {
+    black: '#1d1d1f', charcoal: '#45484d', grey: '#9b9ea3', 'light grey': '#c9cbce', white: '#f6f6f3', ivory: '#f3eee0', cream: '#ece3cf',
+    stone: '#cfc6b5', taupe: '#8f8172', beige: '#d8c6a6', khaki: '#b9a87c', tan: '#c49a6c', camel: '#b6854c', brown: '#6a4529', chocolate: '#3f2a1d',
+    navy: '#1f2b47', denim: '#4d6790', 'light wash': '#8fa7c4', 'black denim': '#2c2f36', 'light blue': '#a8c3e3',
+  },
+  Colors: {
+    red: '#b9302f', wine: '#5c1a2b', burgundy: '#6d1f2d', maroon: '#7a2531', rust: '#a2482a', terracotta: '#c0643f', coral: '#ec7f6a', orange: '#d8772c',
+    mustard: '#c99a2e', yellow: '#e2bf4b', 'butter yellow': '#f1df9a',
+    sage: '#a3b18f', mint: '#b4dcc4', green: '#3e7a52', 'forest green': '#24493a', emerald: '#1f7a5c', olive: '#6c6b3c',
+    teal: '#2a7479', 'sky blue': '#86b6e0', blue: '#3560b5', cobalt: '#2448a8', 'royal blue': '#2d3fa0',
+    lavender: '#b9a9d9', lilac: '#c8a2c8', purple: '#6b4a8d', plum: '#5d2f4f',
+    blush: '#efc6c3', pink: '#e6a6b5', mauve: '#b07a88', 'hot pink': '#e0408a', fuchsia: '#c2187a',
+  },
+  Metallics: { gold: '#c8a54b', silver: '#b9bcc2', 'rose gold': '#d4a091', metallic: '#c9b98a' },
+  Patterns: { striped: null, plaid: null, floral: null, leopard: null, 'polka dot': null, print: null },
 };
-const NEUTRAL = new Set(['black', 'charcoal', 'grey', 'white', 'cream', 'navy', 'denim', 'light blue', 'khaki', 'beige', 'camel', 'brown', 'metallic', 'striped']);
-const GOOD_PAIRS = [['pink', 'red'], ['pink', 'burgundy'], ['green', 'pink'], ['olive', 'orange'], ['blue', 'orange'], ['blue', 'yellow'], ['purple', 'yellow'], ['green', 'burgundy'], ['olive', 'burgundy'], ['red', 'blue']];
+const COLORS = Object.assign({}, ...Object.values(COLOR_GROUPS));
+const NEUTRAL = new Set([...Object.keys(COLOR_GROUPS.Neutrals), ...Object.keys(COLOR_GROUPS.Metallics), 'striped']);
+const BOLD_PATTERN = new Set(['print', 'floral', 'plaid', 'leopard', 'polka dot']);
+// Shades of one hue read as one color (tonal dressing), so they don't count as clashing.
+const FAMILY = {
+  red: 'red', wine: 'red', burgundy: 'red', maroon: 'red',
+  rust: 'orange', terracotta: 'orange', coral: 'orange', orange: 'orange',
+  mustard: 'yellow', yellow: 'yellow', 'butter yellow': 'yellow',
+  sage: 'green', mint: 'green', green: 'green', 'forest green': 'green', emerald: 'green', olive: 'green',
+  teal: 'blue', 'sky blue': 'blue', blue: 'blue', cobalt: 'blue', 'royal blue': 'blue',
+  lavender: 'purple', lilac: 'purple', purple: 'purple', plum: 'purple',
+  blush: 'pink', pink: 'pink', mauve: 'pink', 'hot pink': 'pink', fuchsia: 'pink',
+};
+const GOOD_PAIRS = [['pink', 'red'], ['green', 'pink'], ['green', 'orange'], ['blue', 'orange'], ['blue', 'yellow'], ['purple', 'yellow'], ['green', 'red'], ['red', 'blue'], ['purple', 'green'], ['pink', 'orange'], ['blue', 'pink']];
 
 const PLACES = {
   errands:     { label: 'Errands & coffee', f: [1, 1] },
@@ -792,15 +815,15 @@ function weatherOk(item, w) {
 function colorOf(i) { return i.color || 'grey'; }
 function colorScore(pieces) {
   const cs = pieces.map(colorOf);
-  const loud = [...new Set(cs.filter(c => !NEUTRAL.has(c)))];
+  const loud = [...new Set(cs.filter(c => !NEUTRAL.has(c)).map(c => BOLD_PATTERN.has(c) ? 'print:' + c : (FAMILY[c] || c)))];
   let s;
   if (loud.length === 0) s = 1.5;
   else if (loud.length === 1) s = 2.5;
   else if (loud.length === 2) s = GOOD_PAIRS.some(([a, b]) => loud.includes(a) && loud.includes(b)) ? 1.2 : -0.5;
   else s = -2;
-  if (cs.filter(c => c === 'print').length > 1) s -= 2;
+  if (cs.filter(c => BOLD_PATTERN.has(c)).length > 1) s -= 2;
   if (cs.filter(c => c === 'striped').length > 1) s -= 1.5;
-  if (cs.filter(c => c === 'denim').length > 1) s -= .6; // easy on double denim
+  if (cs.filter(c => ['denim', 'light wash', 'black denim'].includes(c)).length > 1) s -= .6; // easy on double denim
   return s;
 }
 function preferBonus(pieces, place) {
@@ -977,6 +1000,10 @@ const GLYPH = {
 };
 function swatchBg(color) {
   if (color === 'striped') return 'repeating-linear-gradient(180deg,#f3f1ea 0 7px,#1f2b47 7px 12px)';
+  if (color === 'plaid') return 'repeating-linear-gradient(0deg,rgba(29,29,31,.35) 0 4px,transparent 4px 14px),repeating-linear-gradient(90deg,rgba(29,29,31,.35) 0 4px,transparent 4px 14px),#a2302f';
+  if (color === 'floral') return 'radial-gradient(circle at 25% 30%,#e6a6b5 0 9%,transparent 10%),radial-gradient(circle at 70% 25%,#f1df9a 0 8%,transparent 9%),radial-gradient(circle at 55% 70%,#e6a6b5 0 10%,transparent 11%),radial-gradient(circle at 20% 80%,#a3b18f 0 7%,transparent 8%),#f3eee0';
+  if (color === 'leopard') return 'radial-gradient(circle at 20% 25%,#3f2a1d 0 7%,transparent 8%),radial-gradient(circle at 60% 35%,#3f2a1d 0 6%,transparent 7%),radial-gradient(circle at 40% 65%,#3f2a1d 0 7%,transparent 8%),radial-gradient(circle at 80% 75%,#3f2a1d 0 6%,transparent 7%),#c49a6c';
+  if (color === 'polka dot') return 'radial-gradient(circle,#f6f6f3 0 18%,transparent 20%) 0 0/16px 16px,#1f2b47';
   if (color === 'print') return 'radial-gradient(circle at 30% 30%,#e2bf4b 0 12%,transparent 13%),radial-gradient(circle at 70% 60%,#b9302f 0 10%,transparent 11%),radial-gradient(circle at 40% 80%,#3e7a52 0 9%,transparent 10%),#ece3cf';
   return COLORS[color] || '#9b9ea3';
 }
@@ -1072,7 +1099,10 @@ function typeOptions(sel) {
   return CAT_ORDER.map(c => `<optgroup label="${CATS[c]}">${Object.entries(TYPES).filter(([, t]) => t.cat === c)
     .map(([k, t]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${t.label}</option>`).join('')}</optgroup>`).join('');
 }
-function colorOptions(sel) { return Object.keys(COLORS).map(c => `<option value="${c}" ${c === sel ? 'selected' : ''}>${cap(c)}</option>`).join(''); }
+function colorOptions(sel) {
+  return Object.entries(COLOR_GROUPS).map(([g, cs]) => `<optgroup label="${g}">${Object.keys(cs)
+    .map(c => `<option value="${c}" ${c === sel ? 'selected' : ''}>${cap(c)}</option>`).join('')}</optgroup>`).join('');
+}
 
 function renderCloset() {
   $('#ownerSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.owner === state.uploadOwner));
@@ -1170,7 +1200,7 @@ function loadImage(file) {
 function nearestColor(rgb) {
   let best = 'grey', bd = Infinity;
   for (const [name, hex] of Object.entries(COLORS)) {
-    if (!hex || name === 'metallic') continue;
+    if (!hex || name in COLOR_GROUPS.Metallics) continue;
     const n = parseInt(hex.slice(1), 16), r = n >> 16, g = n >> 8 & 255, b = n & 255;
     const rm = (rgb[0] + r) / 2;
     const d = (2 + rm / 256) * (rgb[0] - r) ** 2 + 4 * (rgb[1] - g) ** 2 + (2 + (255 - rm) / 256) * (rgb[2] - b) ** 2;
