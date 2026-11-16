@@ -463,6 +463,9 @@ const GOOD_PAIRS = [['pink', 'red'], ['pink', 'burgundy'], ['green', 'pink'], ['
 
 const PLACES = {
   errands:     { label: 'Errands & coffee', f: [1, 1] },
+  lobby:       { label: 'Lobby, packages & lounge', f: [1, 2], indoor: true,
+                 prefer: ['sweater', 'cardigan', 'leggings', 'longsleeve', 'loafers', 'sneakers', 'jeans', 'jewelry', 'watch'],
+                 exclude: ['suit', 'blazer', 'dressshoes', 'heels', 'coat', 'puffer', 'raincoat', 'trench', 'denimjacket', 'leatherjacket', 'running', 'activetop', 'umbrella', 'scarf', 'sunglasses', 'hat', 'tie', 'shorts'] },
   brunch:      { label: 'Brunch', f: [1, 2] },
   office:      { label: 'Office', f: [2, 3] },
   interview:   { label: 'Interview / big meeting', f: [3, 4] },
@@ -506,6 +509,7 @@ const STAPLES = {
     { name: 'White leather sneakers', types: ['sneakers'], colors: ['white'], why: 'Clean enough for smart casual.' },
     { name: 'Brown leather boots', types: ['boots'], colors: ['brown', 'camel'], why: 'Rain, cold and dinner all covered.' },
     { name: 'Leather dress shoes or loafers', types: ['dressshoes', 'loafers'], why: 'Needed with tailoring.' },
+    { name: 'Tailored joggers', types: ['leggings'], why: 'Polished enough for the lobby and residents\' lounge.' },
     { name: 'Leather belt', types: ['belt'], why: 'Finishes anything with belt loops; match it to your shoes.' },
     { name: 'Watch', types: ['watch'], why: 'The one accessory that works with everything.' },
   ],
@@ -527,6 +531,7 @@ const STAPLES = {
     { name: 'Ankle boots', types: ['boots'], why: 'Rain, cold and dresses all covered.' },
     { name: 'Ballet flats or loafers', types: ['flats', 'loafers'], why: 'Office shoes you can walk in.' },
     { name: 'Neutral heels', types: ['heels'], why: 'Weddings and evenings out.' },
+    { name: 'Knit lounge set or wide-leg joggers', types: ['leggings'], why: 'Polished loungewear for the lobby and residents\' lounge.' },
     { name: 'Leather tote or crossbody', types: ['bag'], why: 'One bag for work and weekends.' },
     { name: 'Silk scarf', types: ['scarf'], why: 'Adds color and warmth.' },
   ],
@@ -733,6 +738,7 @@ function formalityFit(pieces, place) {
 }
 
 function outerNeed(w, place) {
+  if (place.indoor) return { need: 'optional', min: 0 };
   if (w.band === 'cold') return { need: 'required', min: 3 };
   if (w.band === 'cool') return { need: 'required', min: 1 };
   if (w.wet) return { need: 'required', min: 0, wet: true };
@@ -852,6 +858,7 @@ function generate(owner, w, place) {
     if (place.f[0] >= 3 && has('shirt')) notes.push('Tuck the shirt in.');
     if (w.band === 'hot') notes.push('Choose linen or cotton and keep colors light.');
     if (w.windy && (has('skirt') || has('dress'))) notes.push('Windy: a fuller skirt may fly up.');
+    if (place.indoor && !has('cardigan') && !has('blazer')) notes.push('Lounges run cool. A cardigan over this works.');
     if (has('jeans') && place.f[0] >= 2 && !has('blazer')) notes.push('Keep the denim dark and the shoes leather.');
 
     const warmth = pieces.filter(p => ['top', 'bottom', 'onepiece', 'outer'].includes(TYPES[p.type].cat)).reduce((a, p) => a + TYPES[p.type].w, 0);
@@ -953,13 +960,18 @@ function renderBrief() {
     `Feels like <strong>${showT(w.temp)}${state.unit}</strong>`,
     `<strong>${COND_LABEL[w.cond]}</strong>${w.windy && w.cond !== 'windy' ? ' + wind' : ''}`,
     w.lo != null ? `Range <strong>${showT(w.lo)}–${showT(w.hi)}</strong>` : '',
-    `<strong>${esc(place.label)}</strong>`,
+    `<strong>${esc(place.label)}</strong>${place.indoor ? ' (indoors, weather ignored)' : ''}`,
     state.forecast && !state.override ? esc(state.forecast.name) : '',
   ].filter(Boolean).join('<span aria-hidden="true">/</span>');
 }
 
+function indoorWeather(w) {
+  // climate-controlled building: ignore the outdoor forecast
+  return { ...w, temp: 21, band: 'mild', cond: 'cloudy', wet: false, snow: false, sunny: false, windy: false, swing: 0, lo: null, hi: null };
+}
 function renderLooks() {
-  const w = currentWeather(), place = PLACES[state.place];
+  const place = PLACES[state.place];
+  const w = place.indoor ? indoorWeather(currentWeather()) : currentWeather();
   const html = ['his', 'hers'].map(owner => {
     const r = generate(owner, w, place);
     let body;
@@ -977,6 +989,7 @@ function renderLooks() {
     return `<div class="col who-${owner}"><div class="col-head"><h3>${owner === 'his' ? 'His' : 'Hers'}</h3><span class="mono" style="color:var(--muted)">${r.looks.length} look${r.looks.length === 1 ? '' : 's'}${r.gaps.length ? ' · ' + r.gaps.length + ' missing' : ''}</span></div>${body}${gaps}</div>`;
   }).join('');
   $('#looksBody').innerHTML = html;
+  if (place.indoor) { $('#looksSub').textContent = 'Three options each for a quick trip to the lobby or an hour in the lounge. Soft knits and clean shoes; the building is climate-controlled, so the outdoor forecast is ignored.'; return; }
   $('#looksSub').textContent = `Three options each for ${place.label.toLowerCase()}, ${BANDS[w.band].label.toLowerCase()} and ${COND_LABEL[w.cond].toLowerCase()}. Shuffle for new combinations.`;
 }
 
